@@ -2,6 +2,7 @@ from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import StructuredTool
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
 def tool_method(func):
     """Mark a method to be converted to a LangChain tool"""
@@ -44,7 +45,7 @@ def create_react_tool_agent(
 ):
     llm = ChatOpenAI(model=model, openai_api_key=api_key)
     prompt = ChatPromptTemplate.from_messages([
-        #MessagesPlaceholder(variable_name = "chat_history"),
+        MessagesPlaceholder(variable_name = "chat_history"),
         ("human", "{input}"),
         MessagesPlaceholder(variable_name = "agent_scratchpad"),
     ])
