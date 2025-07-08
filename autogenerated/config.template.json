@@ -1,0 +1,32 @@
+{
+  "openai": {
+    "api_key": "sk-your-actual-openai-api-key-goes-here",
+    "model": "gpt-4",
+    "temperature": 0.7,
+    "max_tokens": 1000
+  },
+  "anthropic": {
+    "api_key": "sk-ant-your-anthropic-api-key-goes-here",
+    "model": "claude-3-sonnet-20240229",
+    "temperature": 0.7,
+    "max_tokens": 1000
+  },
+  "langchain": {
+    "tracing": false,
+    "langsmith_api_key": "ls__your-langsmith-api-key-goes-here",
+    "project_name": "chainlit-project"
+  },
+  "chainlit": {
+    "host": "localhost",
+    "port": 8000,
+    "debug": true
+  },
+  "database": {
+    "url": "sqlite:///./app.db",
+    "echo": false
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  }
+}
