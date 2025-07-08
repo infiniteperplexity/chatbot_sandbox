@@ -61,10 +61,6 @@ logs/
 .chainlit/
 chainlit.md
 
-# Jupyter Notebooks
-.ipynb_checkpoints/
-*.ipynb
-
 # pytest
 .pytest_cache/
 .coverage
