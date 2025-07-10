@@ -1,6 +1,11 @@
 import subprocess
 import os
 import signal
+import importlib
+import threading
+import time
+import sys
+from chainlit.cli import run_chainlit
 
 def kill_chainlit_processes():
     """Don't blame me, Copilot wrote this."""
@@ -59,3 +64,13 @@ def launch_chainlit_app(app_path='app.py', kill_existing=True, headless=True):
     headless_flag = " --headless" if headless else ""
     command = f"cd {os.getcwd()} && chainlit-env/bin/python -m chainlit run {app_path} --host 0.0.0.0 --port 8000{headless_flag}"
     os.system(command)
+
+def run_chainlit_thread(app_name: str):
+    if not app_name.endswith('.py'):
+        app_name += '.py'
+    module_name = app_name[:-3]
+    thread = threading.Thread(target=lambda: run_chainlit(app_name))
+    thread.daemon = True
+    thread.start()
+    return thread
+

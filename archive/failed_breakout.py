@@ -8,7 +8,12 @@ import chainlit as cl
 from langchain_core.tools import tool 
 from tools import create_react_tool_agent
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-import app_memory_hook
+import sys
+import time
+
+print(f"=== MODULE LOADING at {time.time()} ===")
+print(f"Module name: {__name__}")
+print(f"Reload count: {getattr(sys.modules.get(__name__, None), '_reload_count', 0) + 1}")
 
 with open("config.json", "r") as f:
     config = json.load(f)
@@ -34,17 +39,14 @@ agent = create_react_tool_agent(
     tools=[long_division],
 )
 
-# So I can see these variables from a notebook running this app as a thread
-app_memory_hook.chat_history = chat_history
-app_memory_hook.agent = agent
-
 @cl.on_chat_start
 async def on_chat_start():   
-    print("are we appending this more than once?")
     intro_message = AIMessage(f"Welcome to the Chainlit app! I can perform long division and read file attachments. Try sending me a message or attaching a file.")
-    chat_history.append(intro_message)
     await cl.Message(content=intro_message.content).send()
-    
+    print("does this actually run?")
+    chat_history = [intro_message]
+    print(f"Length of chat history: {len(chat_history)}")
+    print(f"id of chat history: {id(chat_history)}")
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -56,14 +58,16 @@ async def on_message(message: cl.Message):
         for element in message.elements:
             if element.type == "file" and (element.mime == "text/plain" or not element.mime): 
                 file_name = element.name if element.name else "(unknown file name)"
-                with open(element.path, "r") as f:
+                with open(file_name, "r") as f:
                     file_text = f.read()
-                file_input = f"File name: {file_name}\nFile content:\n{file_text}"
-                chat_history.append(HumanMessage(content=file_input))
+                #input = f"{message.content}\n\nFile name: {file_name}\nFile content:\n{file_text}"
+                # once we actually have chat history, we will want to use that instead of concatenating, I think.
+    #response = (await agent.ainvoke({"input": input}))
     
     response = await agent.ainvoke({
         "input": input,
-        "chat_history": chat_history,
+        #"chat_history": chat_history,
+        "chat_history": [msg for msg in chat_history],  # Convert messages to string content
     })
     output = response["output"]
     if response["intermediate_steps"]:
@@ -71,8 +75,12 @@ async def on_message(message: cl.Message):
         print(response["intermediate_steps"])
 
     ## Update chat history with the new message and response
+    print(f"=== UPDATING CHAT HISTORY ===")
+    
     chat_history.append(HumanMessage(content=input))
     chat_history.append(AIMessage(content=output))
+    print(f"Length of chat history: {len(chat_history)}")
+    print(f"id of chat history: {id(chat_history)}")
 
     print(f"=== SENDING RESPONSE: {output} ===")
     # Send the response back to the user
