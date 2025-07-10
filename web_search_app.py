@@ -3,10 +3,13 @@
 # 2. Very basic tool use.
 # 3. The simplest form of chat history that doesn't reduce in any way.
 
+import os
 import json
+import time
 import chainlit as cl
 from langchain_core.tools import tool 
 from tools import create_react_tool_agent
+from langchain_tavily import TavilySearch, TavilyExtract
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 import app_memory_hook
 
@@ -15,9 +18,12 @@ with open("config.json", "r") as f:
 
 model = config["openai"]["default_model"]
 api_key = config["openai"]["api_key"]
+tavily_key = config["tavily"]["api_key"]
+os.environ["TAVILY_API_KEY"] = tavily_key
 
 chat_history = []
 
+# custom tool
 @tool
 def long_division(dividend: int, divisor: int) -> str:
     """Perform long division on two integers."""
@@ -28,26 +34,46 @@ def long_division(dividend: int, divisor: int) -> str:
     remainder = dividend % divisor
     return f"The result of {dividend} divided by {divisor} is {quotient} with a remainder of {remainder} ({result})."
 
+# Initialize Tavily tools
+tavily_search_tool = TavilySearch(
+    max_results=5,
+    topic="general",
+    include_images=False,
+    include_raw_content=False
+)
+
+tavily_extract_tool = TavilyExtract(
+    extract_depth="basic",
+    include_images=False
+)
+tools = [tavily_search_tool, tavily_extract_tool, long_division]
+
 agent = create_react_tool_agent(
     model=model,
     api_key=api_key,
-    tools=[long_division],
+    tools=tools,
 )
 
 # So I can see these variables from a notebook running this app as a thread
 app_memory_hook.chat_history = chat_history
 app_memory_hook.agent = agent
 
+
 @cl.on_chat_start
-async def on_chat_start():   
+async def on_chat_start(): 
     chat_history.clear()  # Clear chat history at the start of each chat  
-    intro_message = AIMessage(f"Welcome to the Chainlit app! I can perform long division and read file attachments. Try sending me a message or attaching a file.")
+    system_message = SystemMessage(
+        content=f"You are a helpful assistant with access to several tools.  Today's date is {time.strftime('%Y-%m-%d')}. "
+    )
+    chat_history.append(system_message)
+    intro_message = AIMessage(f"Welcome to the Chainlit app! I can perform long division and read file attachments. I also just learned to search the web! Try sending me a message or attaching a file.")
     chat_history.append(intro_message)
     await cl.Message(content=intro_message.content).send()
     
 
 @cl.on_message
 async def on_message(message: cl.Message):
+    #global chat_history
     print(f"=== MESSAGE RECEIVED: {message.content} ===")
     input = message.content
     if message.elements:
