@@ -100,5 +100,10 @@ async def on_message(message: cl.Message):
     chat_history.append(AIMessage(content=output))
 
     print(f"=== SENDING RESPONSE: {output} ===")
+    # Let's do some fake "thinking" steps to test the UI
+    async with cl.Step(name="Test") as step:
+        # Step is sent as soon as the context manager is entered
+        step.input = "hello"
+        step.output = "world"
     # Send the response back to the user
     await cl.Message(content=output).send()

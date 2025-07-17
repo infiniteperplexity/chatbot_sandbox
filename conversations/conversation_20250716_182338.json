@@ -1,0 +1,20 @@
+{
+  "timestamp": "2025-07-16T18:23:38.593527",
+  "messages": [
+    {
+      "type": "AIMessage",
+      "content": "Welcome to the Chainlit app! I can perform long division and read file attachments. Try sending me a message or attaching a file.",
+      "timestamp": "2025-07-16T18:23:38.593537"
+    },
+    {
+      "type": "HumanMessage",
+      "content": "I'm going to fill in some chat messages to then test saving the chat history.",
+      "timestamp": "2025-07-16T18:23:38.593541"
+    },
+    {
+      "type": "AIMessage",
+      "content": "Sounds great! Please go ahead and send your chat messages. When you're ready to test saving the chat history, just let me know how I can assist.",
+      "timestamp": "2025-07-16T18:23:38.593543"
+    }
+  ]
+}

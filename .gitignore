@@ -32,6 +32,9 @@ config.json
 .env
 *.env
 
+# all files in /saved_threads
+saved_threads/
+
 # IDE
 .vscode/
 .idea/

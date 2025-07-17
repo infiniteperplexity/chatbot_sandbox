@@ -1,0 +1,35 @@
+[
+  {
+    "content": "Welcome to the Chainlit app!",
+    "additional_kwargs": {},
+    "response_metadata": {},
+    "type": "ai",
+    "name": null,
+    "id": null,
+    "example": false,
+    "tool_calls": [],
+    "invalid_tool_calls": [],
+    "usage_metadata": null
+  },
+  {
+    "content": "I'm going to mention two vegetables, cucumber and eggplant.  Then I will save the chat history and test re-loading it.",
+    "additional_kwargs": {},
+    "response_metadata": {},
+    "type": "human",
+    "name": null,
+    "id": null,
+    "example": false
+  },
+  {
+    "content": "Sounds good! You mentioned cucumber and eggplant. Once you save and reload the chat history, let me know if everything appears correctly or if you need help with anything else.",
+    "additional_kwargs": {},
+    "response_metadata": {},
+    "type": "ai",
+    "name": null,
+    "id": null,
+    "example": false,
+    "tool_calls": [],
+    "invalid_tool_calls": [],
+    "usage_metadata": null
+  }
+]
