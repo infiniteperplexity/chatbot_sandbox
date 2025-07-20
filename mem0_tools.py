@@ -1,0 +1,286 @@
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+import chainlit as cl
+from chainlit_tools import files_to_messages
+from pydantic import BaseModel, Field
+from Enum import Enum
+import json
+import uuid
+from sentence_transformers import SentenceTransformer
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain.schema import Document
+
+
+
+_default_stateless_prompt = """
+Progressively summarize the lines of conversation provided.
+
+EXAMPLE
+Human: What do you think of artificial intelligence?
+AI: I think artificial intelligence is a force for good.
+Human: Why do you think artificial intelligence is a force for good?
+AI: Because artificial intelligence will help humans reach their full potential.
+
+Summary:
+The human asks what the AI thinks of artificial intelligence. The AI thinks artificial intelligence is a force for good because it will help humans reach their full potential.
+END OF EXAMPLE
+
+Conversation:
+{new_lines}
+
+Summary:
+
+"""
+
+_default_cumulative_prompt = """
+Progressively summarize the lines of conversation provided, adding onto the previous summary returning a new summary.
+
+EXAMPLE
+Current summary:
+The human asks what the AI thinks of artificial intelligence. The AI thinks artificial intelligence is a force for good.
+
+New lines of conversation:
+Human: Why do you think artificial intelligence is a force for good?
+AI: Because artificial intelligence will help humans reach their full potential.
+
+New summary:
+The human asks what the AI thinks of artificial intelligence. The AI thinks artificial intelligence is a force for good because it will help humans reach their full potential.
+END OF EXAMPLE
+
+Current summary:
+{summary}
+
+New lines of conversation:
+{new_lines}
+
+New summary:
+
+"""
+
+class ChatHistorySummarizer:
+    default_stateless_prompt = _default_stateless_prompt
+    default_cumulative_prompt = _default_cumulative_prompt
+
+    def __init__(self, llm, cumulative=True, cumulative_prompt=None, stateless_prompt=None):
+        self.llm = llm
+        self.current_summary = ""
+        self.cumulative_prompt = cumulative_prompt or self.__class__.default_cumulative_prompt # is this how you do this?
+        self.stateless_prompt = stateless_prompt or self.__class__.default_stateless_prompt
+        self.cumulative = cumulative
+
+    def summarize(self, messages, cumulative=None):
+        if cumulative is None:
+            cumulative = self.cumulative
+        if cumulative:
+            prompt = self.cumulative_prompt.format(summary=self.current_summary, new_lines="\n".join([msg.content for msg in messages]))
+        else:
+            prompt = self.stateless_prompt.format(new_lines="\n".join([msg.content for msg in messages]))
+        summary = self.llm.invoke(prompt).content.strip()
+        if cumulative:
+            self.current_summary = summary
+        return summary
+    
+
+class OperationType(Enum):
+    """An enumeration for memory operations."""
+    ADD = "add"
+    UPDATE = "update"
+    DELETE = "delete"
+    NONE = "none"
+
+class MemoryItem(BaseModel):
+    """A model to represent a memory item."""
+    id: str = Field(..., description="The ID of the memory item to operate on.")
+    text: str = Field(..., description="The text parameter for the memory operation.")
+
+class MemoryEvent(BaseModel):
+    """A model to represent a memory operation."""
+    event: OperationType = Field(..., description="The type of memory operation.")
+    id: str = Field(..., description="The ID of the memory item to operate on.")
+    text: str = Field(..., description="The text parameter for the memory operation.")
+
+class MemoryEvents(BaseModel):
+    """A model to represent a list of memory operations."""
+    events: list[MemoryEvent] = Field(..., description="A list of memory operations to be performed.")
+    
+class ExtractedFacts(BaseModel):
+    """A model to represent extracted facts."""
+    facts: list[str] = Field(..., description="A list of extracted facts and/or preferences from the conversation.")
+   
+
+_extract_facts_prompt_template = """
+You are a Personal Information Organizer, specialized in accurately storing facts, user memories, and preferences. Your primary role is to extract relevant pieces of information from conversations and organize them into distinct, manageable facts.
+
+Example:
+Input:
+Yesterday, I had a meeting with John at 3pm. We discussed the new project.  
+Output:
+{"facts" : ["Had a meeting with John at 3pm", "Discussed the new project"]}  
+
+Return the facts and preferences in a json format as shown above.
+
+Input: {input}
+Output:
+"""
+
+_prepare_updates_prompt_template = """
+You are a smart memory manager which controls the memory of a system.
+You can perform four operations: (1) add (2) update (3) delete (4) no change.
+Compare the newly retrieved facts with the existing memories.
+
+Retrieved memories:
+{memories}
+New facts:
+{facts}
+
+For each new fact, decide whether to:
+- ADD {event: "add", id: (generated by the system), text: fact}
+- UPDATE {event: "update", id: existing_id, text: fact}
+- DELETE {event: "delete", id: existing_id, text: (ignored)}
+- NONE {event: "none", id: (ignored), text: (ignored)}
+
+Operations:
+
+"""
+
+class SentenceTransformerEmbeddings:
+    def __init__(self, model):
+        self.model = model
+    
+    def embed_query(self, text):
+        return self.model.encode(text).tolist()
+    
+    def embed_documents(self, texts):
+        return [self.model.encode(text).tolist() for text in texts]
+
+class InMemorySentenceTransformerMemory:
+    def __init__(self, model="all-MiniLM-L6-v2", file_path=None):
+        self.model = SentenceTransformer(model)
+        self.store = InMemoryVectorStore(embedding_function=SentenceTransformerEmbeddings(model))
+        if file_path:
+            self.load_from_file(file_path)
+
+
+    def clear_memories(self):
+        """Clear all memories."""
+        self.store.clear()
+        
+    def load_from_file(self, file_path):
+        """Load memories from a JSON file."""
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+            for item in data:
+                memory_id = item['id']
+                text = item['text']
+                doc = Document(id=memory_id, page_content=text)
+                self.store.add_documents([doc])
+
+    def save_to_file(self, file_path):
+        """Save memories to a JSON file."""
+        documents = self.store.get_all_documents()
+        data = [{'id': doc.id, 'text': doc.page_content} for doc in documents]
+        with open(file_path, 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def add_memory(self, text):
+        """Add a new memory item."""
+        memory_id = str(uuid.uuid4())
+        doc = Document(id=memory_id, page_content=text)
+        self.store.add_documents([doc])
+        return memory_id
+    
+    def update_memory(self, memory_id, text):
+        """Update an existing memory item."""
+        doc = Document(id=memory_id, page_content=text)
+        self.store.add_documents([doc]) # Overwrites the existing memory with the same ID
+
+    def delete_memory(self, memory_id):
+        """Delete a memory item."""
+        self.store.delete(ids=[memory_id])
+
+    def get_memory(self, memory_id):
+        """Retrieve a memory item by its ID."""
+        results = self.store.get_by_ids([memory_id])
+        return results[0] if results else None
+
+    def find_memories(self, query, n=5):
+        """Find memories that match a query."""
+        results = self.store.similarity_search(query, k=n)
+        memory_items = [MemoryItem(id=result.id, text=result.page_content) for result in results]
+        return memory_items
+
+        
+class Mem0izer:
+    """A class to handle the Mem0 operations for the Chainlit app."""
+    def __init__(self, llm, memory = None):
+        self.fact_extractor = llm.with_structured_output(ExtractedFacts, method="json_schema")
+        self.update_preparer = llm.with_structured_output(MemoryEvent, method="json_schema")
+        self.memory = memory or InMemorySentenceTransformerMemory()
+
+    def extract_facts(self, messages):
+        messages_text = ""
+        for message in messages:
+            if isinstance(message, HumanMessage):
+                messages_text += f"Human: {message.content}\n"
+            elif isinstance(message, AIMessage):
+                messages_text += f"AI: {message.content}\n"
+        response = self.fact_extractor.invoke(_extract_facts_prompt_template.format(input=messages_text))
+        return response.facts
+
+    def retrieve_memories(self, messages_or_facts):
+        if not messages_or_facts:
+            return []
+        all_memories = {}
+        for item in messages_or_facts:
+            if isinstance(item, str):
+                memories = _dummy_retrieve(item)
+            elif isinstance(item, HumanMessage) or isinstance(item, AIMessage):
+                memories = _dummy_retrieve(item.content)
+            for memory in memories:
+                if memory.id not in all_memories:
+                    all_memories[memory.id] = memory
+        all_memories = list(all_memories.values())
+        return all_memories
+
+    def prepare_updates(self, facts, memories):
+        facts_text = "\n".join(facts)
+        memories_text = str([
+            memory.model_dump_json(indent=2) for memory in memories
+        ])
+        updates = self.update_preparer.invoke(
+            _prepare_updates_prompt_template.format(
+                memories=memories_text,
+                facts=facts_text
+            )
+        )
+        return updates.events
+
+    def handle_updates(self, updates):
+        for update in updates:
+            if update.event == OperationType.ADD:
+                new_id = str(uuid.uuid4())
+                self.memory.add_memory(MemoryItem(id=new_id, text=update.text))
+            elif update.event == OperationType.UPDATE:
+                if update.id in self.memory:
+                    self.memory[update.id].text = update.text
+            elif update.event == OperationType.DELETE:
+                if update.id in self.memory:
+                    del self.memory[update.id]
+            elif update.event == OperationType.NONE:
+                pass
+            else:
+                raise ValueError(f"Unknown operation type: {update.event}")
+
+    def apply_mem0_operations(self, message):
+        memory_inputs = self.extract_facts([message])
+        facts = self.extract_facts(memory_inputs)
+        for fact in facts:
+            top_facts = self.retrieve_memories([fact])
+            if top_facts:
+                updates = self.prepare_updates(facts, top_facts)
+                self.update_memory(updates)
+        context_memories = self.retrieve_memories(memory_inputs)
+        return context_memories
+
+    def memories_to_text(self, memories):
+        """Convert the current memories to a text format."""
+        return "\n".join([f"{memory.text}" for memory in self.memories.values()])
