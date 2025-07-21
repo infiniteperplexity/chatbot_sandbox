@@ -1,15 +1,12 @@
+## Testing was less than thorough...
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-import chainlit as cl
-from chainlit_tools import files_to_messages
 from pydantic import BaseModel, Field
-from Enum import Enum
+from enum import Enum
 import json
 import uuid
-from sentence_transformers import SentenceTransformer
+from langchain_openai import OpenAIEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain.schema import Document
-
-
 
 _default_stateless_prompt = """
 Progressively summarize the lines of conversation provided.
@@ -68,6 +65,8 @@ class ChatHistorySummarizer:
         self.cumulative = cumulative
 
     def summarize(self, messages, cumulative=None):
+        if not messages:
+            return None
         if cumulative is None:
             cumulative = self.cumulative
         if cumulative:
@@ -98,7 +97,7 @@ class MemoryEvent(BaseModel):
     id: str = Field(..., description="The ID of the memory item to operate on.")
     text: str = Field(..., description="The text parameter for the memory operation.")
 
-class MemoryEvents(BaseModel):
+class MemoryEventsList(BaseModel):
     """A model to represent a list of memory operations."""
     events: list[MemoryEvent] = Field(..., description="A list of memory operations to be performed.")
     
@@ -142,20 +141,13 @@ Operations:
 
 """
 
-class SentenceTransformerEmbeddings:
-    def __init__(self, model):
-        self.model = model
-    
-    def embed_query(self, text):
-        return self.model.encode(text).tolist()
-    
-    def embed_documents(self, texts):
-        return [self.model.encode(text).tolist() for text in texts]
-
-class InMemorySentenceTransformerMemory:
-    def __init__(self, model="all-MiniLM-L6-v2", file_path=None):
-        self.model = SentenceTransformer(model)
-        self.store = InMemoryVectorStore(embedding_function=SentenceTransformerEmbeddings(model))
+class InMemoryOpenAIMemory:
+    def __init__(self, api_key=None, model="text-embedding-3-small", file_path=None):
+        self.embeddings = OpenAIEmbeddings(
+            api_key=api_key,
+            model=model
+        )
+        self.store = InMemoryVectorStore(embedding=self.embeddings)
         if file_path:
             self.load_from_file(file_path)
 
@@ -211,30 +203,41 @@ class InMemorySentenceTransformerMemory:
         
 class Mem0izer:
     """A class to handle the Mem0 operations for the Chainlit app."""
-    def __init__(self, llm, memory = None):
+    def __init__(self, llm, memory=None, api_key=None):
         self.fact_extractor = llm.with_structured_output(ExtractedFacts, method="json_schema")
-        self.update_preparer = llm.with_structured_output(MemoryEvent, method="json_schema")
-        self.memory = memory or InMemorySentenceTransformerMemory()
+        self.update_preparer = llm.with_structured_output(MemoryEventsList, method="json_schema")
+        self.memory = memory or InMemoryOpenAIMemory(api_key=api_key)
 
     def extract_facts(self, messages):
         messages_text = ""
+        print(messages)
         for message in messages:
             if isinstance(message, HumanMessage):
                 messages_text += f"Human: {message.content}\n"
             elif isinstance(message, AIMessage):
                 messages_text += f"AI: {message.content}\n"
-        response = self.fact_extractor.invoke(_extract_facts_prompt_template.format(input=messages_text))
+            elif isinstance(message, str):
+                messages_text += f"Human: {message}\n"
+
+    
+        # I did it this way because str.format() seems to have trouble when there are { and } in the actual text
+        formatted = _extract_facts_prompt_template.replace("{input}", messages_text)
+        print(f"Extracting facts from: {formatted}")
+        response = self.fact_extractor.invoke(formatted)
+        print(f"Response was: {response}")
         return response.facts
 
     def retrieve_memories(self, messages_or_facts):
         if not messages_or_facts:
             return []
+        if isinstance(messages_or_facts, str):
+            messages_or_facts = [messages_or_facts]
         all_memories = {}
         for item in messages_or_facts:
             if isinstance(item, str):
-                memories = _dummy_retrieve(item)
+                memories = self.memory.find_memories(item)
             elif isinstance(item, HumanMessage) or isinstance(item, AIMessage):
-                memories = _dummy_retrieve(item.content)
+                memories = self.memory.find_memories(item.content)
             for memory in memories:
                 if memory.id not in all_memories:
                     all_memories[memory.id] = memory
@@ -246,41 +249,43 @@ class Mem0izer:
         memories_text = str([
             memory.model_dump_json(indent=2) for memory in memories
         ])
-        updates = self.update_preparer.invoke(
-            _prepare_updates_prompt_template.format(
-                memories=memories_text,
-                facts=facts_text
-            )
-        )
+        # I did it this way because str.format() seems to have trouble when there are { and } in the actual text
+        formatted = _prepare_updates_prompt_template.replace("{memories}", memories_text).replace("{facts}", facts_text)
+        updates = self.update_preparer.invoke(formatted)
         return updates.events
 
     def handle_updates(self, updates):
         for update in updates:
             if update.event == OperationType.ADD:
-                new_id = str(uuid.uuid4())
-                self.memory.add_memory(MemoryItem(id=new_id, text=update.text))
+                self.memory.add_memory(update.text)
             elif update.event == OperationType.UPDATE:
                 if update.id in self.memory:
-                    self.memory[update.id].text = update.text
+                    self.memory.update_memory(update.id, update.text)
             elif update.event == OperationType.DELETE:
                 if update.id in self.memory:
-                    del self.memory[update.id]
+                    self.memory.delete_memory(update.id)
             elif update.event == OperationType.NONE:
                 pass
             else:
                 raise ValueError(f"Unknown operation type: {update.event}")
 
     def apply_mem0_operations(self, message):
-        memory_inputs = self.extract_facts([message])
-        facts = self.extract_facts(memory_inputs)
-        for fact in facts:
+        facts = self.extract_facts([message])
+        print(f"Extracted facts: {facts}")
+        all_facts = {}
+        for fact in facts: # This logic is slightly different from what Mem0 does in their repo, but we can deal with that later.
             top_facts = self.retrieve_memories([fact])
-            if top_facts:
-                updates = self.prepare_updates(facts, top_facts)
-                self.update_memory(updates)
-        context_memories = self.retrieve_memories(memory_inputs)
+            for top_fact in top_facts:
+                if top_fact.id not in all_facts:
+                    all_facts[top_fact.id] = top_fact
+        all_facts = list(all_facts.values())
+        updates = self.prepare_updates(facts, all_facts)
+        print(f"Updates prepared: {updates}")
+        self.handle_updates(updates)
+        context_memories = self.retrieve_memories(facts)
+        if not context_memories:
+            print("No context memories found.")
+            return []
+        else:
+            print(f"Context memories found: {context_memories}")
         return context_memories
-
-    def memories_to_text(self, memories):
-        """Convert the current memories to a text format."""
-        return "\n".join([f"{memory.text}" for memory in self.memories.values()])
